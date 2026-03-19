@@ -8,6 +8,31 @@ from sqlalchemy.orm import selectinload
 
 from app.models.tag import Tag
 from app.models.word import Word
+from app.models.word_stats import WordStats
+
+# Default hours since last practiced for words with no practice history
+_DEFAULT_HOURS_SINCE = 168.0  # 1 week
+
+
+def _compute_weight(stats: WordStats | None, now: datetime) -> float:
+    """Compute Leitner selection weight for a word.
+
+    Weight = (1 / box) * hours_since_last_practiced.
+    Words in lower boxes and words not practiced recently get higher weight.
+    """
+    if stats is None:
+        return _DEFAULT_HOURS_SINCE  # box=1, never practiced
+
+    box = stats.box
+    if stats.last_practiced is not None:
+        last = stats.last_practiced
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        hours_since = max((now - last).total_seconds() / 3600.0, 1.0)
+    else:
+        hours_since = _DEFAULT_HOURS_SINCE
+
+    return (1.0 / box) * hours_since
 
 
 async def select_words_for_practice(
@@ -24,16 +49,6 @@ async def select_words_for_practice(
 
     Words in lower boxes (more difficult) and words not practiced recently
     have higher probability of being selected.
-
-    Args:
-        db: Async database session.
-        user_id: The user's UUID.
-        language: Filter words by this language.
-        count: Number of words to select.
-        tag_ids: Optional list of tag IDs to filter by.
-
-    Returns:
-        List of selected Word objects.
     """
     query = (
         select(Word)
@@ -53,30 +68,8 @@ async def select_words_for_practice(
     if len(all_words) <= count:
         return all_words
 
-    # Calculate selection weights using Modified Leitner formula
     now = datetime.now(timezone.utc)
-    weights: list[float] = []
-
-    for word in all_words:
-        stats = word.stats
-        if stats is None:
-            # No stats yet -- treat as box 1, never practiced (high priority)
-            box = 1
-            hours_since = 168.0  # Default to 1 week
-        else:
-            box = stats.box
-            if stats.last_practiced is not None:
-                last = stats.last_practiced
-                if last.tzinfo is None:
-                    last = last.replace(tzinfo=timezone.utc)
-                delta = now - last
-                hours_since = max(delta.total_seconds() / 3600.0, 1.0)
-            else:
-                hours_since = 168.0  # 1 week default
-
-        # Modified Leitner: weight = (1 / box) * time_since_last_practiced
-        weight = (1.0 / box) * hours_since
-        weights.append(weight)
+    weights = [_compute_weight(word.stats, now) for word in all_words]
 
     # Weighted random selection without replacement
     selected: list[Word] = []

@@ -23,6 +23,37 @@ from app.services.llm import suggest_definition as llm_suggest_definition
 router = APIRouter()
 
 
+async def _get_owned_word(
+    db: AsyncSession, word_id: uuid.UUID, user_id: uuid.UUID
+) -> Word:
+    """Fetch a word by ID that belongs to the given user, or raise 404."""
+    result = await db.execute(
+        select(Word)
+        .options(selectinload(Word.tags), selectinload(Word.stats))
+        .where(Word.id == word_id, Word.user_id == user_id)
+    )
+    word = result.scalar_one_or_none()
+    if word is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Word not found")
+    return word
+
+
+async def _validate_tag_ids(
+    db: AsyncSession, tag_ids: list[uuid.UUID], user_id: uuid.UUID
+) -> list[Tag]:
+    """Fetch tags by IDs owned by the user. Raises 400 if any ID is invalid."""
+    result = await db.execute(
+        select(Tag).where(Tag.id.in_(tag_ids), Tag.user_id == user_id)
+    )
+    tags = result.scalars().all()
+    if len(tags) != len(tag_ids):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="One or more tag IDs are invalid",
+        )
+    return list(tags)
+
+
 @router.post("", response_model=WordResponse, status_code=status.HTTP_201_CREATED)
 async def create_word(
     body: WordCreate,
@@ -37,18 +68,8 @@ async def create_word(
         context_sentence=body.context_sentence,
     )
 
-    # Attach tags if provided
     if body.tag_ids:
-        result = await db.execute(
-            select(Tag).where(Tag.id.in_(body.tag_ids), Tag.user_id == user_id)
-        )
-        tags = result.scalars().all()
-        if len(tags) != len(body.tag_ids):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="One or more tag IDs are invalid",
-            )
-        word.tags = list(tags)
+        word.tags = await _validate_tag_ids(db, body.tag_ids, user_id)
 
     # Create default word stats (box 1)
     word.stats = WordStats(word_id=word.id)
@@ -122,15 +143,7 @@ async def get_word(
     user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Word:
-    result = await db.execute(
-        select(Word)
-        .options(selectinload(Word.tags), selectinload(Word.stats))
-        .where(Word.id == word_id, Word.user_id == user_id)
-    )
-    word = result.scalar_one_or_none()
-    if word is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Word not found")
-    return word
+    return await _get_owned_word(db, word_id, user_id)
 
 
 @router.patch("/{word_id}", response_model=WordResponse)
@@ -140,30 +153,14 @@ async def update_word(
     user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Word:
-    result = await db.execute(
-        select(Word)
-        .options(selectinload(Word.tags), selectinload(Word.stats))
-        .where(Word.id == word_id, Word.user_id == user_id)
-    )
-    word = result.scalar_one_or_none()
-    if word is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Word not found")
+    word = await _get_owned_word(db, word_id, user_id)
 
     update_data = body.model_dump(exclude_unset=True)
 
     # Handle tag updates separately
     tag_ids = update_data.pop("tag_ids", None)
     if tag_ids is not None:
-        tag_result = await db.execute(
-            select(Tag).where(Tag.id.in_(tag_ids), Tag.user_id == user_id)
-        )
-        tags = tag_result.scalars().all()
-        if len(tags) != len(tag_ids):
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="One or more tag IDs are invalid",
-            )
-        word.tags = list(tags)
+        word.tags = await _validate_tag_ids(db, tag_ids, user_id)
 
     for field, value in update_data.items():
         setattr(word, field, value)
@@ -179,10 +176,5 @@ async def delete_word(
     user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    result = await db.execute(
-        select(Word).where(Word.id == word_id, Word.user_id == user_id)
-    )
-    word = result.scalar_one_or_none()
-    if word is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Word not found")
+    word = await _get_owned_word(db, word_id, user_id)
     await db.delete(word)

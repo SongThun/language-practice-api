@@ -53,6 +53,11 @@ def _decode_hs256(token: str) -> uuid.UUID:
         audience=_JWT_AUDIENCE,
         issuer=_JWT_ISSUER,
     )
+    return _extract_user_id(payload)
+
+
+def _extract_user_id(payload: dict) -> uuid.UUID:
+    """Extract and validate the user UUID from a JWT payload's sub claim."""
     user_id = payload.get("sub")
     if user_id is None:
         raise HTTPException(
@@ -75,31 +80,23 @@ async def get_current_user(
     try:
         # Try JWKS-based verification first
         jwks = await _get_jwks()
-        # Extract the signing key from JWKS
         header = jwt.get_unverified_header(token)
         kid = header.get("kid")
 
         keys_by_kid = {k["kid"]: k for k in jwks.get("keys", []) if "kid" in k}
         rsa_key = keys_by_kid.get(kid, {})
 
-        if rsa_key:
-            payload = jwt.decode(
-                token,
-                rsa_key,
-                algorithms=["RS256"],
-                audience=_JWT_AUDIENCE,
-                issuer=_JWT_ISSUER,
-            )
-            user_id = payload.get("sub")
-            if user_id is None:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="Token missing sub claim",
-                )
-            return uuid.UUID(user_id)
-        else:
-            # Fallback: verify with Supabase JWT secret (HS256)
+        if not rsa_key:
             return _decode_hs256(token)
+
+        payload = jwt.decode(
+            token,
+            rsa_key,
+            algorithms=["RS256"],
+            audience=_JWT_AUDIENCE,
+            issuer=_JWT_ISSUER,
+        )
+        return _extract_user_id(payload)
 
     except JWTError as e:
         raise HTTPException(

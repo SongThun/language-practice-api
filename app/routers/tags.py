@@ -12,21 +12,40 @@ from app.schemas.tag import TagCreate, TagResponse, TagUpdate
 router = APIRouter()
 
 
-@router.post("", response_model=TagResponse, status_code=status.HTTP_201_CREATED)
-async def create_tag(
-    body: TagCreate,
-    user_id: uuid.UUID = Depends(get_current_user),
-    db: AsyncSession = Depends(get_db),
+async def _get_owned_tag(
+    db: AsyncSession, tag_id: uuid.UUID, user_id: uuid.UUID
 ) -> Tag:
-    # Check for duplicate tag name for this user
+    """Fetch a tag by ID that belongs to the given user, or raise 404."""
+    result = await db.execute(
+        select(Tag).where(Tag.id == tag_id, Tag.user_id == user_id)
+    )
+    tag = result.scalar_one_or_none()
+    if tag is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
+    return tag
+
+
+async def _check_duplicate_tag_name(
+    db: AsyncSession, user_id: uuid.UUID, name: str
+) -> None:
+    """Raise 409 if a tag with the given name already exists for the user."""
     existing = await db.execute(
-        select(Tag).where(Tag.user_id == user_id, Tag.name == body.name)
+        select(Tag).where(Tag.user_id == user_id, Tag.name == name)
     )
     if existing.scalar_one_or_none() is not None:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
             detail="Tag with this name already exists",
         )
+
+
+@router.post("", response_model=TagResponse, status_code=status.HTTP_201_CREATED)
+async def create_tag(
+    body: TagCreate,
+    user_id: uuid.UUID = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> Tag:
+    await _check_duplicate_tag_name(db, user_id, body.name)
 
     tag = Tag(user_id=user_id, name=body.name)
     db.add(tag)
@@ -52,13 +71,7 @@ async def get_tag(
     user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Tag:
-    result = await db.execute(
-        select(Tag).where(Tag.id == tag_id, Tag.user_id == user_id)
-    )
-    tag = result.scalar_one_or_none()
-    if tag is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
-    return tag
+    return await _get_owned_tag(db, tag_id, user_id)
 
 
 @router.patch("/{tag_id}", response_model=TagResponse)
@@ -68,23 +81,10 @@ async def update_tag(
     user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> Tag:
-    result = await db.execute(
-        select(Tag).where(Tag.id == tag_id, Tag.user_id == user_id)
-    )
-    tag = result.scalar_one_or_none()
-    if tag is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
+    tag = await _get_owned_tag(db, tag_id, user_id)
 
-    # Check for duplicate name
     if body.name != tag.name:
-        existing = await db.execute(
-            select(Tag).where(Tag.user_id == user_id, Tag.name == body.name)
-        )
-        if existing.scalar_one_or_none() is not None:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="Tag with this name already exists",
-            )
+        await _check_duplicate_tag_name(db, user_id, body.name)
 
     tag.name = body.name
     await db.flush()
@@ -98,10 +98,5 @@ async def delete_tag(
     user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    result = await db.execute(
-        select(Tag).where(Tag.id == tag_id, Tag.user_id == user_id)
-    )
-    tag = result.scalar_one_or_none()
-    if tag is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tag not found")
+    tag = await _get_owned_tag(db, tag_id, user_id)
     await db.delete(tag)
