@@ -10,7 +10,15 @@ from app.dependencies import get_current_user
 from app.models.tag import Tag
 from app.models.word import Word
 from app.models.word_stats import WordStats
-from app.schemas.word import WordCreate, WordListResponse, WordResponse, WordUpdate
+from app.schemas.word import (
+    SuggestDefinitionRequest,
+    SuggestDefinitionResponse,
+    WordCreate,
+    WordListResponse,
+    WordResponse,
+    WordUpdate,
+)
+from app.services.llm import suggest_definition as llm_suggest_definition
 
 router = APIRouter()
 
@@ -51,12 +59,23 @@ async def create_word(
     return word
 
 
+@router.post("/suggest-definition", response_model=SuggestDefinitionResponse)
+async def suggest_definition(
+    request: SuggestDefinitionRequest,
+    user_id: uuid.UUID = Depends(get_current_user),
+) -> dict:
+    definition = await llm_suggest_definition(
+        request.word, request.context_sentence, request.language
+    )
+    return {"definition": definition}
+
+
 @router.get("", response_model=WordListResponse)
 async def list_words(
     language: str | None = Query(None),
     tag_id: uuid.UUID | None = Query(None),
     search: str | None = Query(None),
-    offset: int = Query(0, ge=0),
+    offset: int = Query(0, ge=0, le=10000),
     limit: int = Query(20, ge=1, le=100),
     user_id: uuid.UUID = Depends(get_current_user),
     db: AsyncSession = Depends(get_db),

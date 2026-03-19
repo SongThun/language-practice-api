@@ -5,18 +5,18 @@ from pydantic import BaseModel, Field
 
 
 class WordCreate(BaseModel):
-    word: str = Field(..., min_length=1, max_length=500)
-    definition: str = Field(..., min_length=1)
+    word: str = Field(..., min_length=1, max_length=100)
+    definition: str = Field(..., min_length=1, max_length=1000)
     language: str = Field(..., min_length=1, max_length=50)
-    context_sentence: str | None = None
+    context_sentence: str | None = Field(None, max_length=500)
     tag_ids: list[uuid.UUID] = Field(default_factory=list)
 
 
 class WordUpdate(BaseModel):
-    word: str | None = Field(None, min_length=1, max_length=500)
-    definition: str | None = Field(None, min_length=1)
+    word: str | None = Field(None, min_length=1, max_length=100)
+    definition: str | None = Field(None, min_length=1, max_length=1000)
     language: str | None = Field(None, min_length=1, max_length=50)
-    context_sentence: str | None = None
+    context_sentence: str | None = Field(None, max_length=500)
     tag_ids: list[uuid.UUID] | None = None
 
 
@@ -54,3 +54,13 @@ class WordResponse(BaseModel):
 class WordListResponse(BaseModel):
     items: list[WordResponse]
     total: int
+
+
+class SuggestDefinitionRequest(BaseModel):
+    word: str = Field(..., min_length=1, max_length=200)
+    context_sentence: str = Field(default="", max_length=1000)
+    language: str = Field(..., min_length=1, max_length=50)
+
+
+class SuggestDefinitionResponse(BaseModel):
+    definition: str

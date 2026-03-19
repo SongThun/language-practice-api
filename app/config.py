@@ -7,6 +7,11 @@ class Settings(BaseSettings):
     SUPABASE_SERVICE_ROLE_KEY: str = ""
     DATABASE_URL: str
     ANTHROPIC_API_KEY: str = ""
+    CORS_ORIGINS: str = "http://localhost:3000"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.CORS_ORIGINS.split(",") if origin.strip()]
 
     @property
     def async_database_url(self) -> str:

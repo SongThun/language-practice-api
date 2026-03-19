@@ -10,6 +10,9 @@ from app.config import settings
 
 security = HTTPBearer()
 
+_JWT_AUDIENCE = "authenticated"
+_JWT_ISSUER = f"{settings.SUPABASE_URL}/auth/v1"
+
 # Cache the JWKS (JSON Web Key Set) from Supabase with TTL
 _jwks_cache: tuple[dict, float] | None = None
 _JWKS_TTL_SECONDS = 3600  # 1 hour
@@ -36,13 +39,19 @@ async def _get_jwks() -> dict:
 
 
 def _decode_hs256(token: str) -> uuid.UUID:
-    """Decode an HS256 JWT using the Supabase key and return the user UUID."""
+    """Decode an HS256 JWT using the Supabase JWT secret and return the user UUID."""
+    secret = settings.SUPABASE_SERVICE_ROLE_KEY
+    if not secret:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Server misconfigured: missing JWT verification key",
+        )
     payload = jwt.decode(
         token,
-        settings.SUPABASE_KEY,
+        secret,
         algorithms=["HS256"],
-        audience="authenticated",
-        issuer=f"{settings.SUPABASE_URL}/auth/v1",
+        audience=_JWT_AUDIENCE,
+        issuer=_JWT_ISSUER,
     )
     user_id = payload.get("sub")
     if user_id is None:
@@ -70,19 +79,16 @@ async def get_current_user(
         header = jwt.get_unverified_header(token)
         kid = header.get("kid")
 
-        rsa_key = {}
-        for key in jwks.get("keys", []):
-            if key.get("kid") == kid:
-                rsa_key = key
-                break
+        keys_by_kid = {k["kid"]: k for k in jwks.get("keys", []) if "kid" in k}
+        rsa_key = keys_by_kid.get(kid, {})
 
         if rsa_key:
             payload = jwt.decode(
                 token,
                 rsa_key,
                 algorithms=["RS256"],
-                audience="authenticated",
-                issuer=f"{settings.SUPABASE_URL}/auth/v1",
+                audience=_JWT_AUDIENCE,
+                issuer=_JWT_ISSUER,
             )
             user_id = payload.get("sub")
             if user_id is None:
@@ -100,12 +106,8 @@ async def get_current_user(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=f"Invalid authentication token: {e}",
         ) from e
-    except httpx.HTTPError:
-        # If JWKS fetch fails, try HS256 with the anon key as a last resort
-        try:
-            return _decode_hs256(token)
-        except JWTError as e:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail=f"Invalid authentication token: {e}",
-            ) from e
+    except httpx.HTTPError as e:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Unable to verify authentication token: JWKS fetch failed",
+        ) from e

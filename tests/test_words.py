@@ -1,3 +1,5 @@
+from unittest.mock import AsyncMock, patch
+
 import pytest
 
 from tests.conftest import TEST_USER_ID
@@ -164,3 +166,54 @@ async def test_delete_word(client):
 
     get_response = await client.get(f"/api/words/{word_id}")
     assert get_response.status_code == 404
+
+
+@pytest.mark.asyncio
+@patch("app.routers.words.llm_suggest_definition", new_callable=AsyncMock)
+async def test_suggest_definition(mock_llm, client):
+    mock_llm.return_value = "a greeting used to say hello"
+
+    response = await client.post(
+        "/api/words/suggest-definition",
+        json={
+            "word": "bonjour",
+            "language": "French",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["definition"] == "a greeting used to say hello"
+    mock_llm.assert_awaited_once_with("bonjour", "", "French")
+
+
+@pytest.mark.asyncio
+@patch("app.routers.words.llm_suggest_definition", new_callable=AsyncMock)
+async def test_suggest_definition_with_context(mock_llm, client):
+    mock_llm.return_value = "thank you (expression of gratitude)"
+
+    response = await client.post(
+        "/api/words/suggest-definition",
+        json={
+            "word": "merci",
+            "context_sentence": "Merci beaucoup pour votre aide.",
+            "language": "French",
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["definition"] == "thank you (expression of gratitude)"
+    mock_llm.assert_awaited_once_with(
+        "merci", "Merci beaucoup pour votre aide.", "French"
+    )
+
+
+@pytest.mark.asyncio
+async def test_suggest_definition_validation_error(client):
+    response = await client.post(
+        "/api/words/suggest-definition",
+        json={
+            "word": "",
+            "language": "French",
+        },
+    )
+    assert response.status_code == 422

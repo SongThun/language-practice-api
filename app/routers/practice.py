@@ -1,5 +1,6 @@
 import uuid
 
+import anthropic
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -81,7 +82,13 @@ async def generate_examples(
     ]
 
     language = words[0].language
-    examples = await llm.generate_example_sentences(word_data, language)
+    try:
+        examples = await llm.generate_example_sentences(word_data, language)
+    except anthropic.APIError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service is temporarily unavailable. Please try again later.",
+        )
 
     return [
         {
@@ -173,6 +180,11 @@ async def evaluate_writing(
             user_writing=body.user_writing,
         )
         return result
+    except anthropic.APIError:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service is temporarily unavailable. Please try again later.",
+        )
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,

@@ -24,24 +24,44 @@ def _strip_code_fence(text: str) -> str:
     return text.strip()
 
 
+def _format_word_entries(words: list[dict[str, str]]) -> str:
+    entries = "\n".join(
+        f"<word><term>{w['word']}</term><definition>{w['definition']}</definition></word>"
+        for w in words
+    )
+    return f"<vocabulary>\n{entries}\n</vocabulary>"
+
+
+async def suggest_definition(word: str, context_sentence: str, language: str) -> str:
+    client = _get_client()
+
+    prompt = (
+        f"Provide a concise definition or English translation for the {language} "
+        f'word/phrase "{word}".'
+    )
+    if context_sentence:
+        prompt += f'\n\nContext: "{context_sentence}"'
+    prompt += (
+        "\n\nRespond with ONLY the definition, nothing else. "
+        "Keep it brief (one short sentence or a few words)."
+    )
+
+    message = await client.messages.create(
+        model="claude-sonnet-4-20250514",
+        max_tokens=256,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    return message.content[0].text.strip()
+
+
 async def generate_example_sentences(
     words: list[dict[str, str]],
     language: str,
 ) -> dict[str, str]:
-    """Generate example sentences for a list of words.
-
-    Args:
-        words: List of dicts with keys "id", "word", "definition".
-        language: The target language for examples.
-
-    Returns:
-        Dict mapping word ID to example sentence.
-    """
     client = _get_client()
 
-    word_list = "\n".join(
-        f"- {w['word']} (definition: {w['definition']})" for w in words
-    )
+    vocab_xml = _format_word_entries(words)
 
     message = await client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -53,7 +73,7 @@ async def generate_example_sentences(
                     f"Generate one natural example sentence for each of the following "
                     f"{language} words/phrases. The sentences should demonstrate proper usage "
                     f"and be appropriate for a language learner.\n\n"
-                    f"{word_list}\n\n"
+                    f"{vocab_xml}\n\n"
                     f"Respond in JSON format only, as a mapping from the word to its example sentence. "
                     f'Example: {{"word1": "sentence1", "word2": "sentence2"}}'
                 ),
@@ -80,23 +100,9 @@ async def evaluate_writing(
     words: list[dict[str, str]],
     language: str,
 ) -> dict:
-    """Evaluate a user's writing for grammar and vocabulary usage.
-
-    Args:
-        user_writing: The text written by the user.
-        words: List of dicts with keys "id", "word", "definition" -- the words the user
-               was supposed to incorporate.
-        language: The target language.
-
-    Returns:
-        Dict with keys: overall_feedback, grammar_notes, word_evaluations.
-        word_evaluations is a list of dicts with: word_id, word, is_correct, feedback.
-    """
     client = _get_client()
 
-    word_list = "\n".join(
-        f"- {w['word']} (definition: {w['definition']})" for w in words
-    )
+    vocab_xml = _format_word_entries(words)
 
     message = await client.messages.create(
         model="claude-sonnet-4-20250514",
@@ -107,8 +113,9 @@ async def evaluate_writing(
                 "content": (
                     f"You are a {language} language tutor. A student was asked to write "
                     f"sentences or a short text incorporating the following vocabulary words:\n\n"
-                    f"{word_list}\n\n"
-                    f"The student wrote:\n\"\"\"\n{user_writing}\n\"\"\"\n\n"
+                    f"{vocab_xml}\n\n"
+                    f"The student wrote:\n"
+                    f"<user_writing>\n{user_writing}\n</user_writing>\n\n"
                     f"Evaluate the writing. Respond in JSON format only with this structure:\n"
                     f"{{\n"
                     f'  "overall_feedback": "General feedback about the writing quality",\n'
